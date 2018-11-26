@@ -6,7 +6,8 @@
 #include <linux/netfilter_ipv6/ip6_tables.h>
 
 enum {
-	O_ICMPV6_TYPE = 0,
+    O_ICMPV6_TYPE = 0,
+    O_ICMPV6_TYPE_RANGE = 1,
 };
 
 struct icmpv6_names {
@@ -83,18 +84,22 @@ static void icmp6_help(void)
 	printf(
 "icmpv6 match options:\n"
 "[!] --icmpv6-type typename	match icmpv6 type\n"
+"				(or numeric type or type/code)\n"
+"--icmpv6-range-type min:max match icmpv6 type range\n"
 "				(or numeric type or type/code)\n");
 	print_icmpv6types();
 }
 
 static const struct xt_option_entry icmp6_opts[] = {
 	{.name = "icmpv6-type", .id = O_ICMPV6_TYPE, .type = XTTYPE_STRING,
-	 .flags = XTOPT_MAND | XTOPT_INVERT},
+	 .flags = XTOPT_INVERT},
+	{.name = "icmpv6-type-range", .id = O_ICMPV6_TYPE_RANGE, .type = XTTYPE_STRING,
+	 .flags = 0},
 	XTOPT_TABLEEND,
 };
 
 static void
-parse_icmpv6(const char *icmpv6type, uint8_t *type, uint8_t code[])
+parse_icmpv6_type(const char *icmpv6type, struct ip6t_icmp_type* type)
 {
 	static const unsigned int limit = ARRAY_SIZE(icmpv6_codes);
 	unsigned int match = limit;
@@ -115,9 +120,9 @@ parse_icmpv6(const char *icmpv6type, uint8_t *type, uint8_t code[])
 	}
 
 	if (match != limit) {
-		*type = icmpv6_codes[match].type;
-		code[0] = icmpv6_codes[match].code_min;
-		code[1] = icmpv6_codes[match].code_max;
+		type->type = icmpv6_codes[match].type;
+		type->code[0] = icmpv6_codes[match].code_min;
+		type->code[1] = icmpv6_codes[match].code_max;
 	} else {
 		char *slash;
 		char buffer[strlen(icmpv6type) + 1];
@@ -132,25 +137,39 @@ parse_icmpv6(const char *icmpv6type, uint8_t *type, uint8_t code[])
 		if (!xtables_strtoui(buffer, NULL, &number, 0, UINT8_MAX))
 			xtables_error(PARAMETER_PROBLEM,
 				   "Invalid ICMPv6 type `%s'\n", buffer);
-		*type = number;
+		type->type = number;
 		if (slash) {
 			if (!xtables_strtoui(slash+1, NULL, &number, 0, UINT8_MAX))
 				xtables_error(PARAMETER_PROBLEM,
 					   "Invalid ICMPv6 code `%s'\n",
 					   slash+1);
-			code[0] = code[1] = number;
+			type->code[0] = type->code[1] = number;
 		} else {
-			code[0] = 0;
-			code[1] = 0xFF;
+			type->code[0] = 0;
+			type->code[1] = 0xFF;
 		}
 	}
+}
+
+static void
+parse_icmpv6_type_range(const char *icmpv6type_range, struct ip6t_icmp_type_range* range)
+{
+    uint32_t min, max;
+    if(  2 == sscanf(icmpv6type_range, "%u:%u$", &min, &max) ){
+        if( min <= max  && min <= UINT8_MAX && max <= UINT8_MAX ){
+            range->min_type = min;
+            range->max_type = max;
+            return;
+        }
+    }
+	xtables_error(PARAMETER_PROBLEM, "Invalid ICMPv6 type range `%s'\n", icmpv6type_range);
 }
 
 static void icmp6_init(struct xt_entry_match *m)
 {
 	struct ip6t_icmp *icmpv6info = (struct ip6t_icmp *)m->data;
 
-	icmpv6info->code[1] = 0xFF;
+	icmpv6info->type.code[1] = 0xFF;
 }
 
 static void icmp6_parse(struct xt_option_call *cb)
@@ -158,9 +177,18 @@ static void icmp6_parse(struct xt_option_call *cb)
 	struct ip6t_icmp *icmpv6info = cb->data;
 
 	xtables_option_parse(cb);
-	parse_icmpv6(cb->arg, &icmpv6info->type, icmpv6info->code);
-	if (cb->invert)
-		icmpv6info->invflags |= IP6T_ICMP_INV;
+    icmpv6info->opt_type = cb->entry->id;
+	if( icmpv6info->opt_type == O_ICMPV6_TYPE ){
+        parse_icmpv6_type(cb->arg, &icmpv6info->type);
+	    if (cb->invert)
+		    icmpv6info->type.invflags |= IP6T_ICMP_INV;
+        printf("type: %u, code_min: %u, code_max: %u\n", 
+                icmpv6info->type.type, icmpv6info->type.code[0], icmpv6info->type.code[1]);
+    }else if( icmpv6info->opt_type == O_ICMPV6_TYPE_RANGE ){
+        parse_icmpv6_type_range(cb->arg, &icmpv6info->range);
+        printf("type_min: %u, type_max: %u\n", 
+                icmpv6info->range.min_type, icmpv6info->range.max_type);
+    }
 }
 
 static void print_icmpv6type(uint8_t type,
@@ -195,31 +223,45 @@ static void print_icmpv6type(uint8_t type,
 		printf(" codes %u-%u", code_min, code_max);
 }
 
+static void print_icmpv6type_range(uint8_t min_type, uint8_t max_type)
+{
+    printf("type range %u-%u", min_type, max_type);
+}
+
 static void icmp6_print(const void *ip, const struct xt_entry_match *match,
                         int numeric)
 {
 	const struct ip6t_icmp *icmpv6 = (struct ip6t_icmp *)match->data;
 
 	printf(" ipv6-icmp");
-	print_icmpv6type(icmpv6->type, icmpv6->code[0], icmpv6->code[1],
-		       icmpv6->invflags & IP6T_ICMP_INV,
-		       numeric);
+    if( icmpv6->opt_type == O_ICMPV6_TYPE ){
+    	print_icmpv6type(icmpv6->type.type, icmpv6->type.code[0], icmpv6->type.code[1],
+	    	       icmpv6->type.invflags & IP6T_ICMP_INV,
+		           numeric);
 
-	if (icmpv6->invflags & ~IP6T_ICMP_INV)
-		printf(" Unknown invflags: 0x%X",
-		       icmpv6->invflags & ~IP6T_ICMP_INV);
+    	if (icmpv6->type.invflags & ~IP6T_ICMP_INV)
+	    	printf(" Unknown invflags: 0x%X",
+		           icmpv6->type.invflags & ~IP6T_ICMP_INV);
+
+    }else if( icmpv6->opt_type == O_ICMPV6_TYPE_RANGE ){
+        print_icmpv6type_range(icmpv6->range.min_type, icmpv6->range.max_type);
+    }
 }
 
 static void icmp6_save(const void *ip, const struct xt_entry_match *match)
 {
 	const struct ip6t_icmp *icmpv6 = (struct ip6t_icmp *)match->data;
 
-	if (icmpv6->invflags & IP6T_ICMP_INV)
-		printf(" !");
+    if( icmpv6->opt_type == O_ICMPV6_TYPE ){
+    	if (icmpv6->type.invflags & IP6T_ICMP_INV)
+	    	printf(" !");
 
-	printf(" --icmpv6-type %u", icmpv6->type);
-	if (icmpv6->code[0] != 0 || icmpv6->code[1] != 0xFF)
-		printf("/%u", icmpv6->code[0]);
+    	printf(" --icmpv6-type %u", icmpv6->type.type);
+	    if (icmpv6->type.code[0] != 0 || icmpv6->type.code[1] != 0xFF)
+		    printf("/%u", icmpv6->type.code[0]);
+    }else if( icmpv6->opt_type == O_ICMPV6_TYPE_RANGE ){
+        printf(" --icmpv6-type %u:%u", icmpv6->range.min_type, icmpv6->range.max_type);
+    }
 }
 
 static struct xtables_match icmp6_mt6_reg = {

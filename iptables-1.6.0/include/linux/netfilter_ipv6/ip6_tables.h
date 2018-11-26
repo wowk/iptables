@@ -180,10 +180,23 @@ struct ip6t_error {
 #define IP6T_SO_ORIGINAL_DST            80
 
 /* ICMP matching stuff */
-struct ip6t_icmp {
+struct ip6t_icmp_type {
 	__u8 type;				/* type to match */
 	__u8 code[2];				/* range of code */
 	__u8 invflags;				/* Inverse flags */
+};
+
+struct ip6t_icmp_type_range {
+    __u8 min_type;
+    __u8 max_type;
+};
+
+struct ip6t_icmp {
+    __u8 opt_type;
+    union {
+        struct ip6t_icmp_type type;
+        struct ip6t_icmp_type_range range;
+    };
 };
 
 /* Values for "inv" field for struct ipt_icmp. */
