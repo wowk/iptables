@@ -260,7 +260,7 @@ static void icmp6_save(const void *ip, const struct xt_entry_match *match)
 	    if (icmpv6->type.code[0] != 0 || icmpv6->type.code[1] != 0xFF)
 		    printf("/%u", icmpv6->type.code[0]);
     }else if( icmpv6->opt_type == O_ICMPV6_TYPE_RANGE ){
-        printf(" --icmpv6-type %u:%u", icmpv6->range.min_type, icmpv6->range.max_type);
+        printf(" --icmpv6-type-range %u:%u", icmpv6->range.min_type, icmpv6->range.max_type);
     }
 }
 
